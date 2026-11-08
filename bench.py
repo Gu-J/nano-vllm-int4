@@ -12,7 +12,7 @@ def main():
     max_ouput_len = 1024
 
     path = os.path.abspath("./downloads/Qwen3-0.6B-GPTQ-Int4")
-    llm = LLM(path, enforce_eager=False, max_model_len=4096)
+    llm = LLM(path, enforce_eager=False, max_model_len=4096, use_w4a16=True)
 
     prompt_token_ids = [[randint(0, 10000) for _ in range(max_input_len)] for _ in range(num_seqs)]
     sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=max_ouput_len) for _ in range(num_seqs)]

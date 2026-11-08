@@ -27,5 +27,8 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 where = ["."]
 include = ["nanovllm*"]
 
+[tool.setuptools.package-data]
+"nanovllm.kernels" = ["*.json"]
+
 [tool.uv.extra-build-dependencies]
 flash-attn = ["torch"]

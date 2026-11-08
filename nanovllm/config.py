@@ -17,8 +17,8 @@ class Config:
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
 
-    use_w4a16: bool = True
-    # use_w4a16: bool = False
+    use_w4a16: bool = False
+    w4a4_checkpoint: str | None = None
 
     def __post_init__(self):
         # assert os.path.isdir(self.model)
@@ -26,3 +26,10 @@ class Config:
         assert 1 <= self.tensor_parallel_size <= 8
         self.hf_config = AutoConfig.from_pretrained(self.model)
         self.max_model_len = min(self.max_model_len, self.hf_config.max_position_embeddings)
+        if self.w4a4_checkpoint is not None:
+            if self.use_w4a16:
+                raise ValueError("W4A16 and W4A4 cannot be enabled together")
+            if self.tensor_parallel_size != 1:
+                raise ValueError("RHT W4A4 currently supports one GPU only")
+            if not os.path.isfile(os.path.join(self.w4a4_checkpoint, "manifest.json")):
+                raise ValueError("w4a4_checkpoint must contain manifest.json")

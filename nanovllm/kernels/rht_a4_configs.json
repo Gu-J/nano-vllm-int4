@@ -1,0 +1,18 @@
+{
+  "32,4096": {
+    "threads_per_row": 512,
+    "rows_per_block": 1
+  },
+  "4096,4096": {
+    "threads_per_row": 64,
+    "rows_per_block": 1
+  },
+  "32,12288": {
+    "threads_per_row": 512,
+    "rows_per_block": 1
+  },
+  "4096,12288": {
+    "threads_per_row": 256,
+    "rows_per_block": 1
+  }
+}

@@ -7,7 +7,6 @@ from multiprocessing.shared_memory import SharedMemory
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
 from nanovllm.models.qwen3 import Qwen3ForCausalLM
-from nanovllm.models.qwen3_w4a16 import W4A16Qwen3ForCausalLM
 from nanovllm.layers.sampler import Sampler
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
@@ -29,19 +28,28 @@ class ModelRunner:
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.dtype)
         torch.set_default_device("cuda")
-        if config.use_w4a16:
+        if config.w4a4_checkpoint is not None:
+            from nanovllm.utils.loader_w4a4 import load_w4a4_model
+            self.model = Qwen3ForCausalLM(hf_config, use_w4a4=True)
+            self.quantization_info = load_w4a4_model(self.model, config.model, config.w4a4_checkpoint)
+        elif config.use_w4a16:
+            from nanovllm.models.qwen3_w4a16 import W4A16Qwen3ForCausalLM
             self.model = W4A16Qwen3ForCausalLM(hf_config)
+            load_model(self.model, config.model)
         else:
             self.model = Qwen3ForCausalLM(hf_config)
-
-        load_model(self.model, config.model)
+            load_model(self.model, config.model)
+        self.model.eval()
+        # Compile warmup and graph capture under the same defaults as serving.
+        # Switching defaults afterwards duplicates Dynamo guards and can exhaust
+        # its cache, making eager and captured normalization take different paths.
+        torch.set_default_device("cpu")
+        torch.set_default_dtype(default_dtype)
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
         if not self.enforce_eager:
             self.capture_cudagraph()
-        torch.set_default_device("cpu")
-        torch.set_default_dtype(default_dtype)
 
         if self.world_size > 1:
             if rank == 0:
@@ -117,7 +125,9 @@ class ModelRunner:
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks,
+                                    self.block_size, num_kv_heads, head_dim,
+                                    device=torch.device("cuda", self.rank), dtype=hf_config.dtype)
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
@@ -230,14 +240,17 @@ class ModelRunner:
         hf_config = config.hf_config
         max_bs = min(self.config.max_num_seqs, 512)
         max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
-        input_ids = torch.zeros(max_bs, dtype=torch.int64)
-        positions = torch.zeros(max_bs, dtype=torch.int64)
-        slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
-        context_lens = torch.zeros(max_bs, dtype=torch.int32)
-        block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
-        outputs = torch.zeros(max_bs, hf_config.hidden_size)
-        # self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
-        self.graph_bs = [1]
+        device = torch.device("cuda", self.rank)
+        input_ids = torch.zeros(max_bs, dtype=torch.int64, device=device)
+        positions = torch.zeros(max_bs, dtype=torch.int64, device=device)
+        slot_mapping = torch.zeros(max_bs, dtype=torch.int32, device=device)
+        context_lens = torch.zeros(max_bs, dtype=torch.int32, device=device)
+        block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32, device=device)
+        outputs = torch.zeros(max_bs, hf_config.hidden_size, dtype=hf_config.dtype, device=device)
+        self.graph_bs = sorted(set(
+            [b for b in (1, 2, 4, 8) if b <= max_bs]
+            + list(range(16, max_bs + 1, 16)) + [max_bs]
+        ))
         self.graphs = {}
         self.graph_pool = None
 

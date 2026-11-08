@@ -18,6 +18,7 @@ class LLMEngine:
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
+        self.config = config
         Sequence.block_size = config.kvcache_block_size
         self.ps = []
         self.events = []
@@ -35,6 +36,9 @@ class LLMEngine:
         atexit.register(self.exit)
 
     def exit(self):
+        if not hasattr(self, "model_runner"):
+            return
+        atexit.unregister(self.exit)
         self.model_runner.call("exit")
         del self.model_runner
         for p in self.ps:
